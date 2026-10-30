@@ -1,10 +1,17 @@
-# Reconciliação Neon
+# Reconciliação de casos Neon
 
-Aplicação para receber o relatório customizado do Projuris em Excel, consolidar casos e reconciliá-los com `ai_deployment.neon_reconciliation`.
+Aplicação para reconciliar o cadastro de casos da Neon no PostgreSQL a partir do relatório customizado do Projuris em Excel.
 
-## Rodar localmente
+## Como funciona
 
-Requer Python 3.12 e uma URL de conexão PostgreSQL com permissão de `SELECT`, `INSERT` e `UPDATE` na tabela.
+1. Envie o relatório `.xlsx` (até 25 MB). A aplicação valida o formato, consolida os casos e identifica CNJs inválidos, que não são incluídos na reconciliação.
+2. Os casos consolidados são comparados aos registros ativos de `ai_deployment.neon_reconciliation`. Casos ausentes do relatório são mantidos por padrão; para removê-los, ative **Remover caso** e escolha a data.
+3. Ao concluir, a aplicação insere casos novos, atualiza os campos alterados dos casos existentes e marca as remoções em `deleted_at`. A remoção usa a data escolhida às 18:00:00 no fuso UTC−03:00. Todas as alterações no banco são feitas em uma transação.
+4. O histórico registra apenas reconciliações concluídas, com o resumo dos resultados e o arquivo original para download.
+
+## Executar localmente
+
+Requer Python 3.12 e acesso ao PostgreSQL com permissões de `SELECT`, `INSERT` e `UPDATE` na tabela.
 
 ```bash
 python3 -m venv .venv
@@ -14,23 +21,18 @@ export ENTER_POSTGRES_AID_URL='postgresql://usuario:senha@host:porta/banco'
 python -m app.server
 ```
 
-Abra [http://localhost:8000](http://localhost:8000). Para mudar a porta, defina `PORT`. Sem `ENTER_POSTGRES_AID_URL`, o site abre, mas o processamento informa que a conexão precisa ser configurada. Não coloque credenciais no repositório.
+Abra [http://localhost:8000](http://localhost:8000). Para rodar os testes:
 
-## Fluxo
+```bash
+python -m unittest discover -s tests -v
+```
 
-1. Envie um `.xlsx` do relatório customizado do Projuris (até 25 MB). A prévia lê o arquivo em memória e consulta somente os casos ativos (`deleted_at IS NULL`). CNJs inválidos são exibidos, mas ignorados na consolidação.
-2. Confira os casos ausentes. Eles são mantidos por padrão; ative **Remover caso** e selecione uma data quando a remoção for necessária.
-3. Ao concluir, a aplicação reconsulta os casos ativos e aplica tudo em uma transação: insere casos novos sem atualizar linhas existentes, atualiza somente os campos alterados e `updated_at` dos casos modificados, e grava `deleted_at` no dia escolhido às 18:00:00 com fuso UTC−03:00. Uma falha no banco causa rollback de toda a transação.
-4. Após o commit, o arquivo e o resumo são salvos no histórico. Prévia e cancelamento não entram no histórico. Caso o arquivamento falhe depois do commit, a interface informa que as alterações foram aplicadas, mas o histórico não pôde ser salvo.
+## Configuração
 
-Prévias abandonadas expiram após uma hora; nesse caso, envie o arquivo novamente.
+| Variável | Uso |
+| --- | --- |
+| `ENTER_POSTGRES_AID_URL` | URL do PostgreSQL que contém `ai_deployment.neon_reconciliation`. Obrigatória para processar arquivos. |
+| `DATA_DIR` | Diretório do histórico e dos arquivos enviados. Padrão: `data/` na raiz do projeto. No Railway, aponte para um volume persistente para preservar o histórico entre deploys. |
+| `PORT` | Porta do servidor. Padrão: `8000`; no Railway, é fornecida pelo ambiente. |
 
-`data/` é ignorado pelo Git. Configure `DATA_DIR` para apontar para um volume persistente no Railway se o histórico de arquivos precisar sobreviver a reinicializações e deploys. Entradas antigas em `data/history.json` continuam disponíveis para download.
-
-## Railway
-
-O [Procfile](Procfile) inicia o servidor na porta `PORT`. Configure `ENTER_POSTGRES_AID_URL` nas variáveis do serviço da aplicação com uma URL que tenha permissão de leitura e escrita na tabela. A aplicação não executa `DELETE` físico nem `TRUNCATE`.
-
-## Origem da consolidação
-
-`app/consolidation/` foi reutilizado de `Desktop/AID/Neon/reconciliation/src/consolidation/`: mapeamento de colunas, limpeza de dados, validação de CNJ e CPF/CNPJ, consolidação de requisições e documentos. A persistência segue a mesma estrutura de colunas e a mesma adaptação de campos JSON do script original.
+Prévias não concluídas ficam apenas em memória e expiram após uma hora. Não inclua credenciais no repositório.

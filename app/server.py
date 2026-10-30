@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 import threading
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 
 from .consolidation import load_mapping, transform
@@ -72,6 +72,23 @@ def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def completed_history() -> list[dict]:
+    return [item for item in read_json(HISTORY_FILE) if item.get("status") == "completed"]
+
+
+def archived_upload(run_id: str) -> tuple[Path, str] | None:
+    entry = next((item for item in completed_history() if item.get("id") == run_id), None)
+    if entry is None:
+        return None
+    stored_name = entry.get("stored_name", "")
+    if not stored_name or Path(stored_name).name != stored_name:
+        return None
+    path = UPLOADS / stored_name
+    if not path.is_file() or path.resolve().parent != UPLOADS.resolve():
+        return None
+    return path, entry.get("name") or stored_name
+
+
 def invalid_cases(frame, mapping) -> list[dict]:
     cnj_field = next(field for field in mapping.fields if field.clean == "cnj")
     folder_field = next(field for field in mapping.fields if field.target == mapping.group_by)
@@ -100,10 +117,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def send_file(self, path: Path, content_type: str):
+    def send_file(self, path: Path, content_type: str, download_name: str | None = None):
         payload = path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
+        if download_name:
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(download_name, safe='')}")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -112,7 +131,7 @@ class Handler(BaseHTTPRequestHandler):
     def body_json(self):
         length = int(self.headers.get("Content-Length", "0"))
         if length > 1024 * 1024:
-            raise ValueError("Requisição muito grande.")
+            raise ValueError("Requisição muito grande")
         return json.loads(self.rfile.read(length) or b"{}")
 
     def do_GET(self):
@@ -121,17 +140,25 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(STATIC / "index.html", "text/html; charset=utf-8")
         if route == "/api/history":
             with LOCK:
-                return self.send_json([item for item in read_json(HISTORY_FILE) if item.get("status") == "completed"])
+                return self.send_json(completed_history())
+        if route.startswith("/api/history/") and route.endswith("/download"):
+            run_id = route[len("/api/history/"):-len("/download")]
+            with LOCK:
+                archived = archived_upload(run_id)
+            if archived:
+                path, name = archived
+                return self.send_file(path, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", name)
+            return self.send_json({"error": "Arquivo desta reconciliação não encontrado"}, HTTPStatus.NOT_FOUND)
         if route.startswith("/static/"):
             name = route.removeprefix("/static/")
             if "/" in name or name.startswith("."):
-                return self.send_json({"error": "Arquivo não encontrado."}, HTTPStatus.NOT_FOUND)
+                return self.send_json({"error": "Arquivo não encontrado"}, HTTPStatus.NOT_FOUND)
             path = STATIC / name
             if not path.is_file():
-                return self.send_json({"error": "Arquivo não encontrado."}, HTTPStatus.NOT_FOUND)
+                return self.send_json({"error": "Arquivo não encontrado"}, HTTPStatus.NOT_FOUND)
             kind = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".jpg": "image/jpeg", ".ttf": "font/ttf"}.get(path.suffix, "application/octet-stream")
             return self.send_file(path, kind)
-        self.send_json({"error": "Página não encontrada."}, HTTPStatus.NOT_FOUND)
+        self.send_json({"error": "Página não encontrada"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self):
         try:
@@ -147,30 +174,30 @@ class Handler(BaseHTTPRequestHandler):
                     if run:
                         run["path"].unlink(missing_ok=True)
                 return self.send_json({"ok": True})
-            self.send_json({"error": "Ação não encontrada."}, HTTPStatus.NOT_FOUND)
+            self.send_json({"error": "Ação não encontrada"}, HTTPStatus.NOT_FOUND)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
             self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception:
             logging.exception("Unexpected server error")
-            self.send_json({"error": "Não foi possível processar o arquivo. Verifique o formato e tente novamente."}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            self.send_json({"error": "Não foi possível processar o arquivo, verifique o formato e tente novamente"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def process(self):
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0 or length > MAX_UPLOAD:
-            raise ValueError("Selecione um arquivo XLSX de até 25 MB.")
+            raise ValueError("Selecione um arquivo Excel de até 25 MB")
         content_type = self.headers.get("Content-Type", "")
         if not content_type.startswith("multipart/form-data"):
-            raise ValueError("Envie o arquivo como formulário.")
+            raise ValueError("Envie o arquivo como formulário")
         form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": content_type, "CONTENT_LENGTH": str(length)})
         if "file" not in form or not form["file"].filename:
-            raise ValueError("Selecione um arquivo XLSX.")
+            raise ValueError("Selecione um arquivo Excel")
         upload = form["file"]
         original_name = Path(upload.filename).name
         if Path(original_name).suffix.lower() != ".xlsx":
             raise ValueError(REPORT_FORMAT_ERROR)
         contents = upload.file.read(MAX_UPLOAD + 1)
         if len(contents) > MAX_UPLOAD:
-            raise ValueError("O arquivo ultrapassa 25 MB.")
+            raise ValueError("O arquivo ultrapassa 25 MB")
         if not contents.startswith(b"PK"):
             raise ValueError(REPORT_FORMAT_ERROR)
         timestamp = datetime.now(timezone.utc)
@@ -202,7 +229,7 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             run = RUNS.get(run_id)
             if run is None:
-                raise ValueError("Esta reconciliação não está mais ativa. Envie o arquivo novamente.")
+                raise ValueError("Esta reconciliação não está mais ativa, envie o arquivo novamente")
             existing = read_json(MOCK_FILE)
             comparison = preview(run["cases"], run["report_keys"], existing)
             next_cases, stats = apply(run["cases"], existing, comparison, decisions)

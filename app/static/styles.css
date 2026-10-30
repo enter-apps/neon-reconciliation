@@ -10,9 +10,7 @@
   --orange: #ffae35;
   --orange-light: #ffeec4;
   --green: #d9f6c7;
-  --red: #ffd7d1;
   --red-text: #b42318;
-  --yellow: #fffadb;
   font: 400 14px/1.24 Geist, Arial, sans-serif;
   color: var(--ink);
 }
@@ -45,8 +43,6 @@ h3 { font-size: 14px; font-weight: 500; }
 .icon { display: block; flex: none; }
 .tag { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 10px; min-height: 24px; background: #f4f4f4; font-size: 12px; font-weight: 500; color: #525252; white-space: nowrap; }
 .tag.green { background: var(--green); color: #2e6219; }
-.tag.yellow { background: var(--yellow); color: #826315; }
-.tag.red { background: var(--red); color: #822a28; }
 .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
 .alert { display: flex; align-items: center; gap: 14px; border-radius: 10px; padding: 17px; line-height: 1.4; font-size: 12px; margin: 16px 0; }
 .alert.error { background: #fff0ed; color: #822a28; }
@@ -79,6 +75,7 @@ h3 { font-size: 14px; font-weight: 500; }
 .history-counts { display: flex; flex-wrap: wrap; gap: 5px 16px; margin-top: 9px; color: var(--muted); font-size: 12px; }
 .history-count b { font-family: GeistMono, monospace; font-weight: 500; color: var(--ink); }
 .history-count.invalid, .history-count.invalid b { color: var(--red-text); }
+.history-download { flex: none; text-decoration: none; }
 .history-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 12px; }
 .pagination-info { white-space: nowrap; font-size: 12px; }
 .pagination-buttons { display: flex; align-items: center; gap: 4px; }
@@ -96,8 +93,7 @@ h3 { font-size: 14px; font-weight: 500; }
 .review-list { display: grid; gap: 10px; }
 .review-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
 .review-card:has(.date-picker.open) { position: relative; z-index: 2; }
-.review-top { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
-.review-top strong { font-weight: 500; }
+.review-info strong { font-weight: 500; }
 .review-sub { font-size: 12px; color: #777; margin-top: 5px; }
 .review-controls { display: flex; align-items: center; gap: 12px; min-height: 49px; margin-top: 15px; padding-top: 13px; border-top: 1px solid #eee; }
 .remove-toggle { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 32px; font-size: 12px; cursor: pointer; user-select: none; }
@@ -159,7 +155,6 @@ h3 { font-size: 14px; font-weight: 500; }
   .metrics, .final-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .card-footer { align-items: flex-start; flex-direction: column; }
   .card-footer .button { width: 100%; }
-  .review-top { align-items: flex-start; flex-direction: column; }
   .history-row { gap: 8px; }
   .history-counts { gap: 5px 10px; }
 }

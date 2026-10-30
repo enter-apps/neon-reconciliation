@@ -28,7 +28,7 @@ function setStep(step) {
 async function request(path, options = {}) {
   const response = await fetch(path, options);
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || 'Não foi possível concluir a ação.');
+  if (!response.ok) throw new Error(body.error || 'Não foi possível concluir a ação');
   return body;
 }
 
@@ -41,6 +41,7 @@ function element(tag, className, text) {
 
 const ICON_PATHS = {
   upload: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M17 8l-5-5-5 5M12 3v12'],
+  download: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5M12 15V3'],
   chevronLeft: ['m15 18-6-6 6-6'],
   chevronRight: ['m9 18 6-6-6-6'],
   firstPage: ['M5 5v14', 'm18 18-6-6 6-6'],
@@ -81,6 +82,11 @@ function localIso(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function closeDatePicker(picker) {
+  picker.classList.remove('open');
+  picker.querySelector('.date-trigger').setAttribute('aria-expanded', 'false');
+}
+
 function datePicker(folder, initialValue, onChange) {
   const root = element('div', 'date-picker');
   const trigger = element('button', 'date-trigger');
@@ -96,16 +102,11 @@ function datePicker(folder, initialValue, onChange) {
   let selected = initialValue;
   let cursor = new Date(`${initialValue}T12:00:00`);
 
-  function close() {
-    root.classList.remove('open');
-    trigger.setAttribute('aria-expanded', 'false');
-  }
-
   function choose(day) {
     selected = localIso(day);
     onChange(selected);
     updateTrigger();
-    close();
+    closeDatePicker(root);
     trigger.focus();
   }
 
@@ -153,10 +154,7 @@ function datePicker(folder, initialValue, onChange) {
 
   trigger.addEventListener('click', () => {
     const opening = !root.classList.contains('open');
-    for (const picker of document.querySelectorAll('.date-picker.open')) {
-      picker.classList.remove('open');
-      picker.querySelector('.date-trigger').setAttribute('aria-expanded', 'false');
-    }
+    for (const picker of document.querySelectorAll('.date-picker.open')) closeDatePicker(picker);
     if (opening) {
       cursor = new Date(`${selected}T12:00:00`);
       renderCalendar();
@@ -181,7 +179,7 @@ function renderHistory() {
   const pagination = $('history-pagination');
   pagination.classList.toggle('hidden', historyItems.length === 0);
   if (!historyItems.length) {
-    list.replaceChildren(element('div', 'empty', 'Nenhuma reconciliação concluída'));
+    list.replaceChildren(element('div', 'empty', 'Nenhuma reconciliação executada'));
     return;
   }
   const pages = Math.ceil(historyItems.length / historySize);
@@ -204,7 +202,12 @@ function renderHistory() {
         counts.append(element('span', '', 'Resumo indisponível para esta execução anterior.'));
       }
       body.append(counts);
-      row.append(body, element('span', 'tag green', 'Concluído'));
+      const download = element('a', 'button history-download');
+      download.href = `/api/history/${encodeURIComponent(item.id)}/download`;
+      download.setAttribute('download', item.name || 'relatorio.xlsx');
+      download.setAttribute('aria-label', `Baixar arquivo da reconciliação de ${displayDate(item.timestamp)}`);
+      download.append(icon('download'), document.createTextNode('Baixar arquivo'));
+      row.append(body, download);
       return row;
   }));
   $('history-page-info').textContent = `Página ${historyPage} de ${pages} de ${historyItems.length} resultados`;
@@ -225,7 +228,7 @@ function setProcessing(busy) {
   $('dropzone').classList.toggle('processing', busy);
   $('dropzone').setAttribute('aria-busy', String(busy));
   $('dropzone-title').textContent = busy ? 'Processando arquivo…' : 'Selecione ou arraste o arquivo aqui';
-  $('dropzone-hint').textContent = busy ? 'Validando e consolidando os casos' : 'Arquivo .xlsx · até 25 MB';
+  $('dropzone-hint').textContent = busy ? 'Validando e consolidando os casos' : 'Arquivo Excel · até 25 MB';
   $('file').disabled = busy;
   $('process').disabled = busy || !state.file;
   $('process').replaceChildren(document.createTextNode(busy ? 'Processando…' : 'Continuar'), busy ? document.createTextNode('') : icon('chevronRight'));
@@ -242,7 +245,7 @@ async function processFile() {
     state.run = result.run_id;
     state.result = result;
     const c = result.comparison;
-    renderMetrics($('process-metrics'), [[result.cases, 'Casos consolidados'], [c.new.length, 'Casos novos'], [c.updated.length, 'Casos remanejados'], [result.invalid.length, 'CNJ inválido']]);
+    renderMetrics($('process-metrics'), [[result.cases, 'Casos consolidados'], [c.new.length, 'Casos novos'], [c.updated.length, 'Casos atualizados'], [result.invalid.length, 'CNJ inválido']]);
     if (c.missing.length || result.invalid.length) {
       $('upload-card').classList.add('hidden');
       review();
@@ -257,7 +260,6 @@ async function processFile() {
 
 function renderMissing() {
   const missing = state.result.comparison.missing;
-  $('missing-count').textContent = `${missing.length} ${missing.length === 1 ? 'caso' : 'casos'}`;
   if (!missing.length) {
     $('missing-list').replaceChildren(element('div', 'card empty', 'Nenhuma possível mudança de patrocínio'));
     return;
@@ -265,10 +267,8 @@ function renderMissing() {
   $('missing-list').replaceChildren(...missing.map((item) => {
     const folder = String(item.legal_folder);
     const card = element('div', 'review-card');
-    const top = element('div', 'review-top');
-    const info = element('div');
-    info.append(element('strong', 'mono', item.case_number || 'CNJ não informado'), element('div', 'review-sub', `Pasta ${folder}${item.plaintiff_name ? ` · ${item.plaintiff_name}` : ''}`));
-    top.append(info, element('span', 'tag yellow', 'Ausente'));
+    const info = element('div', 'review-info');
+    info.append(element('strong', 'mono', item.case_number || 'CNJ não informado'), element('div', 'review-sub', `Pasta ${folder}${item.plaintiff_name ? `  · ${item.plaintiff_name}` : ''}`));
     const controls = element('div', 'review-controls');
     const dateWrap = element('div', 'date-field is-hidden');
     dateWrap.append(element('span', '', 'Data de remoção'));
@@ -285,9 +285,7 @@ function renderMissing() {
       if (input.checked) state.decisions[folder] = { action: 'remove', deleted_at: removalDate };
       else {
         delete state.decisions[folder];
-        const picker = dateWrap.querySelector('.date-picker');
-        picker.classList.remove('open');
-        picker.querySelector('.date-trigger').setAttribute('aria-expanded', 'false');
+        closeDatePicker(dateWrap.querySelector('.date-picker'));
       }
       dateWrap.classList.toggle('is-hidden', !input.checked);
     });
@@ -296,14 +294,13 @@ function renderMissing() {
     toggle.append(input, track, document.createTextNode('Remover caso'));
     controls.append(toggle);
     controls.append(dateWrap);
-    card.append(top, controls);
+    card.append(info, controls);
     return card;
   }));
 }
 
 function renderInvalid() {
   const invalid = state.result.invalid;
-  $('invalid-count').textContent = `${invalid.length} ${invalid.length === 1 ? 'caso' : 'casos'}`;
   const list = $('invalid-list');
   if (!invalid.length) {
     list.replaceChildren(element('div', 'empty', 'Nenhum CNJ inválido encontrado'));
@@ -336,7 +333,7 @@ async function finish() {
   for (const item of missing) {
     const folder = String(item.legal_folder);
     const decision = state.decisions[folder];
-    if (decision?.action === 'remove' && !decision.deleted_at) return showError(`Informe a data de remoção da pasta ${folder}.`);
+    if (decision?.action === 'remove' && !decision.deleted_at) return showError(`Informe a data de remoção da pasta ${folder}`);
   }
   const button = $('finish');
   button.disabled = true;
@@ -390,18 +387,14 @@ dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragging
 dropzone.addEventListener('drop', (event) => { event.preventDefault(); dropzone.classList.remove('dragging'); if (!$('file').disabled) chooseFile(event.dataTransfer.files[0]); });
 document.addEventListener('pointerdown', (event) => {
   for (const picker of document.querySelectorAll('.date-picker.open')) {
-    if (!picker.contains(event.target)) {
-      picker.classList.remove('open');
-      picker.querySelector('.date-trigger').setAttribute('aria-expanded', 'false');
-    }
+    if (!picker.contains(event.target)) closeDatePicker(picker);
   }
 });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   for (const picker of document.querySelectorAll('.date-picker.open')) {
-    picker.classList.remove('open');
     const trigger = picker.querySelector('.date-trigger');
-    trigger.setAttribute('aria-expanded', 'false');
+    closeDatePicker(picker);
     trigger.focus();
   }
 });

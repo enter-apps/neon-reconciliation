@@ -50,17 +50,17 @@ def preview(cases: list[dict], report_keys: list[int], existing: list[dict]) -> 
 def validate_decisions(missing: list[dict], decisions: dict) -> dict[int, dict]:
     allowed = {int(item["legal_folder"]) for item in missing}
     if not set(decisions) <= {str(key) for key in allowed}:
-        raise ValueError("Decisão enviada para um caso que não está ausente da extração.")
+        raise ValueError("Decisão enviada para um caso que não está ausente da extração")
     cleaned = {}
     for key, item in decisions.items():
         if not isinstance(item, dict) or item.get("action") not in {"keep", "remove"}:
-            raise ValueError(f"Decisão inválida para a pasta {key}.")
+            raise ValueError(f"Decisão inválida para a pasta {key}")
         if item["action"] == "remove":
             value = item.get("deleted_at")
             try:
                 date.fromisoformat(value)
             except (TypeError, ValueError):
-                raise ValueError(f"Informe uma data de remoção válida para a pasta {key}.") from None
+                raise ValueError(f"Informe uma data de remoção válida para a pasta {key}") from None
         cleaned[int(key)] = item
     return cleaned
 

@@ -37,7 +37,11 @@ class HistoryTest(unittest.TestCase):
         def send_json(value, status=200):
             handler.response = (value, status)
             return handler.response
+        def send_file(path, content_type, download_name=None):
+            handler.response = ({"contents": path.read_bytes(), "content_type": content_type, "download_name": download_name}, 200)
+            return handler.response
         handler.send_json = send_json
+        handler.send_file = send_file
         return handler
 
     def upload(self, valid=True):
@@ -78,6 +82,9 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual(self.history(), [])
         self.assertEqual(len(list(server.PENDING.iterdir())), 1)
         self.assertEqual(list(server.UPLOADS.iterdir()), [])
+        unavailable, status = self.handler(f"/api/history/{valid['run_id']}/download").do_GET()
+        self.assertEqual(status, 404)
+        self.assertIn("não encontrado", unavailable["error"])
 
         cancelled, status = self.handler("/api/cancel", {"run_id": valid["run_id"]}).do_POST()
         self.assertEqual((cancelled, status), ({"ok": True}, 200))
@@ -102,6 +109,16 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual(self.history()[0]["summary"], {"cases": valid["cases"], **result["stats"]})
         self.assertEqual(list(server.PENDING.iterdir()), [])
         self.assertEqual(len(list(server.UPLOADS.iterdir())), 1)
+        download, status = self.handler(f"/api/history/{valid['run_id']}/download").do_GET()
+        self.assertEqual(status, 200)
+        self.assertEqual(download["contents"], next(server.UPLOADS.iterdir()).read_bytes())
+        self.assertEqual(download["download_name"], "relatorio.xlsx")
+        self.assertEqual(download["content_type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        history = self.history()
+        history[0]["stored_name"] = "../outside.xlsx"
+        server.atomic_json(server.HISTORY_FILE, history)
+        _, status = self.handler(f"/api/history/{valid['run_id']}/download").do_GET()
+        self.assertEqual(status, 404)
 
     def test_legacy_unfinished_entries_are_removed_on_startup(self):
         (server.PENDING / "interrupted.xlsx").write_bytes(b"old upload")

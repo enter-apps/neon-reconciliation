@@ -4,6 +4,7 @@ import logging
 
 import json
 from pathlib import Path
+from typing import BinaryIO
 
 import pandas as pd
 
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 Record = dict[str, object]
 
 
-def read_source(path: str | Path, mapping: Mapping) -> pd.DataFrame:
+def read_source(path: str | Path | BinaryIO, mapping: Mapping) -> pd.DataFrame:
     """Read the spreadsheet and select the mapped columns by position.
 
     Columns are resolved positionally rather than by pandas' de-duplicated

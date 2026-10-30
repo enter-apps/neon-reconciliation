@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import cgi
-from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 import json
 import logging
 import os
@@ -17,15 +17,14 @@ from uuid import uuid4
 from .consolidation import load_mapping, transform
 from .consolidation.cleaners import clean_cnj, is_blank
 from .consolidation.transform import read_source
-from .reconcile import apply, normalize, preview
+from .database import DatabaseReadError, load_existing_cases
+from .reconcile import normalize, planned_stats, preview
 
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "app" / "static"
 DATA = Path(os.environ.get("DATA_DIR", str(ROOT / "data"))).resolve()
 UPLOADS = DATA / "uploads"
-PENDING = DATA / "pending"
-MOCK_FILE = DATA / "mock_cases.json"
 HISTORY_FILE = DATA / "history.json"
 MAX_UPLOAD = 25 * 1024 * 1024
 REPORT_FORMAT_ERROR = "O arquivo não corresponde ao formato esperado de relatório customizado do Projuris"
@@ -33,47 +32,23 @@ LOCK = threading.RLock()
 RUNS: dict[str, dict] = {}
 
 
-def ensure_data():
-    UPLOADS.mkdir(parents=True, exist_ok=True)
-    PENDING.mkdir(parents=True, exist_ok=True)
-    for path in PENDING.iterdir():
-        if path.is_file():
-            path.unlink()
-    if not MOCK_FILE.exists():
-        sample = json.loads((ROOT / "app" / "mock_cases.example.json").read_text(encoding="utf-8"))
-        atomic_json(MOCK_FILE, sample)
-    if not HISTORY_FILE.exists():
-        atomic_json(HISTORY_FILE, [])
-    else:
-        history = read_json(HISTORY_FILE)
-        completed = [item for item in history if item.get("status") == "completed"]
-        changed = len(completed) != len(history)
-        for item in completed:
-            summary = item.get("summary")
-            if summary:
-                before = dict(summary)
-                summary["inserted"] = summary.get("inserted", summary.get("new", 0))
-                summary["unchanged"] = summary.get(
-                    "unchanged", max(0, summary.get("cases", 0) - summary["inserted"] - summary.get("updated", 0))
-                )
-                summary.pop("new", None)
-                changed |= summary != before
-        if changed:
-            atomic_json(HISTORY_FILE, completed)
-
-
-def atomic_json(path: Path, value):
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
-
-
 def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def completed_history() -> list[dict]:
-    return [item for item in read_json(HISTORY_FILE) if item.get("status") == "completed"]
+    if not HISTORY_FILE.is_file():
+        return []
+    completed = [item for item in read_json(HISTORY_FILE) if item.get("status") == "completed"]
+    for item in completed:
+        summary = item.get("summary")
+        if summary:
+            summary["inserted"] = summary.get("inserted", summary.get("new", 0))
+            summary["unchanged"] = summary.get(
+                "unchanged", max(0, summary.get("cases", 0) - summary["inserted"] - summary.get("updated", 0))
+            )
+            summary.pop("new", None)
+    return completed
 
 
 def archived_upload(run_id: str) -> tuple[Path, str] | None:
@@ -170,11 +145,12 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/cancel":
                 run_id = self.body_json().get("run_id")
                 with LOCK:
-                    run = RUNS.pop(run_id, None)
-                    if run:
-                        run["path"].unlink(missing_ok=True)
+                    RUNS.pop(run_id, None)
                 return self.send_json({"ok": True})
             self.send_json({"error": "Ação não encontrada"}, HTTPStatus.NOT_FOUND)
+        except DatabaseReadError as error:
+            logging.warning("Database read unavailable: %s", error)
+            self.send_json({"error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
             self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception:
@@ -200,26 +176,20 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("O arquivo ultrapassa 25 MB")
         if not contents.startswith(b"PK"):
             raise ValueError(REPORT_FORMAT_ERROR)
-        timestamp = datetime.now(timezone.utc)
-        run_id = uuid4().hex
-        stored_name = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}_{run_id[:8]}_{original_name}"
-        path = PENDING / stored_name
-        path.write_bytes(contents)
-        history_item = {"id": run_id, "name": original_name, "stored_name": stored_name, "timestamp": timestamp.isoformat()}
         try:
             mapping = load_mapping()
-            source = read_source(path, mapping)
-            frame = transform(path, mapping, source=source)
+            source = read_source(BytesIO(contents), mapping)
+            frame = transform(original_name, mapping, source=source)
             cases = [normalize(item) for item in frame.to_dict("records")]
             report_keys = [int(key) for key in frame.attrs["report_keys"] if not is_blank(key)]
             invalid = invalid_cases(source, mapping)
-            with LOCK:
-                comparison = preview(cases, report_keys, read_json(MOCK_FILE))
-                RUNS[run_id] = {"cases": cases, "report_keys": report_keys, "invalid": invalid, "path": path, "file": history_item}
         except Exception as error:
-            path.unlink(missing_ok=True)
             logging.warning("Arquivo não corresponde ao relatório customizado esperado: %s", error)
             raise ValueError(REPORT_FORMAT_ERROR) from error
+        comparison = preview(cases, report_keys, load_existing_cases())
+        run_id = uuid4().hex
+        with LOCK:
+            RUNS[run_id] = {"comparison": comparison, "invalid": invalid}
         self.send_json({"run_id": run_id, "cases": len(cases), "invalid": invalid, "comparison": comparison})
 
     def finish_run(self):
@@ -230,28 +200,12 @@ class Handler(BaseHTTPRequestHandler):
             run = RUNS.get(run_id)
             if run is None:
                 raise ValueError("Esta reconciliação não está mais ativa, envie o arquivo novamente")
-            existing = read_json(MOCK_FILE)
-            comparison = preview(run["cases"], run["report_keys"], existing)
-            next_cases, stats = apply(run["cases"], existing, comparison, decisions)
-            history = read_json(HISTORY_FILE)
-            summary = {"cases": len(run["cases"]), **stats, "invalid": len(run["invalid"])}
-            entry = {**run["file"], "status": "completed", "summary": summary}
-            history.insert(0, entry)
-            archived_path = UPLOADS / run["path"].name
-            run["path"].replace(archived_path)
-            try:
-                atomic_json(MOCK_FILE, next_cases)
-                atomic_json(HISTORY_FILE, history)
-            except Exception:
-                atomic_json(MOCK_FILE, existing)
-                archived_path.replace(run["path"])
-                raise
+            stats = planned_stats(run["comparison"], decisions)
             del RUNS[run_id]
         self.send_json({"stats": {**stats, "invalid": len(run["invalid"])}})
 
 
 def main():
-    ensure_data()
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"Neon Reconciliation em http://localhost:{port}", flush=True)

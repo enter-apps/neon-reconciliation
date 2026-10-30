@@ -23,6 +23,8 @@ def normalize(value):
         return [normalize(item) for item in value]
     if is_blank(value):
         return None
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
     if hasattr(value, "item"):
         return value.item()
     return value
@@ -63,6 +65,16 @@ def validate_decisions(missing: list[dict], decisions: dict) -> dict[int, dict]:
                 raise ValueError(f"Informe uma data de remoção válida para a pasta {key}") from None
         cleaned[int(key)] = item
     return cleaned
+
+
+def planned_stats(comparison: dict, decisions: dict) -> dict[str, int]:
+    resolved = validate_decisions(comparison["missing"], decisions)
+    return {
+        "inserted": len(comparison["new"]),
+        "updated": len(comparison["updated"]),
+        "removed": sum(item["action"] == "remove" for item in resolved.values()),
+        "unchanged": len(comparison["unchanged"]),
+    }
 
 
 def apply(cases: list[dict], existing: list[dict], comparison: dict, decisions: dict) -> tuple[list[dict], dict]:

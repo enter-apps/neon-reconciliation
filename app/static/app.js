@@ -245,7 +245,7 @@ async function processFile() {
     state.run = result.run_id;
     state.result = result;
     const c = result.comparison;
-    renderMetrics($('process-metrics'), [[result.cases, 'Casos consolidados'], [c.new.length, 'Casos novos'], [c.updated.length, 'Casos atualizados'], [result.invalid.length, 'CNJ inválido']]);
+    renderMetrics($('process-metrics'), [[result.cases, 'Casos consolidados'], [c.new.length, 'Casos novos'], [c.updated.length, 'Para atualizar'], [result.invalid.length, 'CNJ inválido']]);
     if (c.missing.length || result.invalid.length) {
       $('upload-card').classList.add('hidden');
       review();
@@ -341,7 +341,7 @@ async function finish() {
   try {
     const result = await request('/api/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run_id: state.run, decisions: state.decisions }) });
     const s = result.stats;
-    renderMetrics($('final-metrics'), [[state.result.cases, 'Casos consolidados'], ...summaryMetrics.map(([key, label]) => [s[key], label])]);
+    renderMetrics($('final-metrics'), [[state.result.cases, 'Casos consolidados'], [s.inserted, 'Para inserir'], [s.updated, 'Para atualizar'], [s.removed, 'Para remover'], [s.unchanged, 'Sem alterações'], [s.invalid, 'CNJ inválido']]);
     $('retry-finish').classList.add('hidden');
     setStep(3);
     return true;

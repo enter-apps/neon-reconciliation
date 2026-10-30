@@ -21,7 +21,7 @@
           <div id="upload-card" class="card upload-card">
             <input id="file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="sr-only">
             <label for="file" class="dropzone" id="dropzone"><span class="upload-icon"><span data-icon="upload" data-size="24"></span></span><span class="loading-spinner" aria-hidden="true"></span><strong id="dropzone-title">Selecione ou arraste o arquivo aqui</strong><span id="dropzone-hint">Arquivo Excel · até 25 MB</span><span id="selected-file" class="selected-file hidden"></span></label>
-            <div class="card-footer"><span>O arquivo será salvo com a data e hora da execução</span><button id="process" class="button primary" type="button" disabled>Continuar <span data-icon="chevronRight"></span></button></div>
+            <div class="card-footer"><span>O arquivo será analisado sem ser salvo</span><button id="process" class="button primary" type="button" disabled>Continuar <span data-icon="chevronRight"></span></button></div>
           </div>
           <div id="retry-finish" class="actions hidden"><button id="retry-cancel" class="button" type="button">Cancelar</button><button id="retry-finish-button" class="button primary" type="button">Tentar novamente <span data-icon="chevronRight"></span></button></div>
           <section class="history"><div class="section-title"><div><h2>Histórico</h2><p>Reconciliações anteriores</p></div></div><div id="history-list" class="card history-card"><div class="empty">Nenhuma reconciliação executada</div></div><div id="history-pagination" class="history-pagination hidden"><span id="history-page-info" class="pagination-info"></span><div class="pagination-buttons"><button id="history-first" class="button pagination-button" type="button" aria-label="Primeira página"><span data-icon="firstPage"></span></button><button id="history-prev" class="button pagination-button" type="button" aria-label="Página anterior"><span data-icon="chevronLeft"></span></button><button id="history-next" class="button pagination-button" type="button" aria-label="Próxima página"><span data-icon="chevronRight"></span></button><button id="history-last" class="button pagination-button" type="button" aria-label="Última página"><span data-icon="lastPage"></span></button></div></div></section>
@@ -36,8 +36,8 @@
         </section>
 
         <section id="screen-3" class="screen hidden">
-          <div class="section-title"><div><h2>Reconciliação concluída</h2><p>Resumo da execução</p></div><span class="tag green">Concluído</span></div>
-          <div class="success-banner"><span><span data-icon="check"></span></span><div><strong>Processamento finalizado</strong><p>O arquivo foi salvo e as alterações foram aplicadas</p></div></div>
+          <div class="section-title"><div><h2>Prévia concluída</h2><p>Alterações identificadas na comparação</p></div><span class="tag green">Somente leitura</span></div>
+          <div class="success-banner"><span><span data-icon="check"></span></span><div><strong>Análise finalizada</strong><p>Nenhum registro ou arquivo foi alterado</p></div></div>
           <div id="final-metrics" class="metrics final-metrics"></div>
           <div class="actions"><button id="restart" class="button primary" type="button">Nova reconciliação</button></div>
         </section>

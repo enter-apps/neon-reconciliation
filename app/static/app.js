@@ -341,9 +341,13 @@ async function finish() {
   try {
     const result = await request('/api/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run_id: state.run, decisions: state.decisions }) });
     const s = result.stats;
-    renderMetrics($('final-metrics'), [[state.result.cases, 'Casos consolidados'], [s.inserted, 'Para inserir'], [s.updated, 'Para atualizar'], [s.removed, 'Para remover'], [s.unchanged, 'Sem alterações'], [s.invalid, 'CNJ inválido']]);
+    renderMetrics($('final-metrics'), [[state.result.cases, 'Casos consolidados'], [s.inserted, 'Casos inseridos'], [s.updated, 'Casos atualizados'], [s.removed, 'Casos removidos'], [s.unchanged, 'Sem alterações'], [s.invalid, 'CNJ inválido']]);
     $('retry-finish').classList.add('hidden');
     setStep(3);
+    if (result.warning) {
+      document.querySelector('.success-banner p').textContent = 'As decisões foram aplicadas ao banco de dados';
+      showError(result.warning);
+    }
     return true;
   } catch (error) {
     if (state.step === 1 && state.run) {
@@ -364,6 +368,7 @@ async function reset() {
   $('file').value = '';
   chooseFile(null);
   $('upload-card').classList.remove('hidden');
+  document.querySelector('.success-banner p').textContent = 'As decisões foram aplicadas e o arquivo foi salvo no histórico';
   $('retry-finish').classList.add('hidden');
   setStep(1);
   loadHistory();

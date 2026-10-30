@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 
 from .consolidation.cleaners import is_blank
 
@@ -65,38 +65,3 @@ def validate_decisions(missing: list[dict], decisions: dict) -> dict[int, dict]:
                 raise ValueError(f"Informe uma data de remoção válida para a pasta {key}") from None
         cleaned[int(key)] = item
     return cleaned
-
-
-def planned_stats(comparison: dict, decisions: dict) -> dict[str, int]:
-    resolved = validate_decisions(comparison["missing"], decisions)
-    return {
-        "inserted": len(comparison["new"]),
-        "updated": len(comparison["updated"]),
-        "removed": sum(item["action"] == "remove" for item in resolved.values()),
-        "unchanged": len(comparison["unchanged"]),
-    }
-
-
-def apply(cases: list[dict], existing: list[dict], comparison: dict, decisions: dict) -> tuple[list[dict], dict]:
-    resolved = validate_decisions(comparison["missing"], decisions)
-    now = datetime.now(timezone.utc).isoformat()
-    next_cases = [dict(item) for item in existing]
-    active_positions = {int(item["legal_folder"]): index for index, item in enumerate(next_cases) if not item.get("deleted_at")}
-    inserted = updated = removed = 0
-    for item in comparison["new"]:
-        next_cases.append({**item, "created_at": now, "updated_at": now, "deleted_at": None})
-        inserted += 1
-    for entry in comparison["updated"]:
-        item = entry["case"]
-        index = active_positions[int(item["legal_folder"])]
-        next_cases[index] = {**next_cases[index], **item, "updated_at": now}
-        updated += 1
-    for folder, decision in resolved.items():
-        if decision["action"] == "remove":
-            index = active_positions[folder]
-            next_cases[index] = {**next_cases[index], "deleted_at": decision["deleted_at"], "updated_at": now}
-            removed += 1
-    return next_cases, {
-        "inserted": inserted, "updated": updated,
-        "removed": removed, "unchanged": len(comparison["unchanged"]),
-    }

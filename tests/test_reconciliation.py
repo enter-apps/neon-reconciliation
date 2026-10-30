@@ -3,17 +3,19 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
 
 import openpyxl
+import psycopg2
 
 from app import database, server
 from app.consolidation import load_mapping
 
 
-class ReadOnlyWorkflowTest(unittest.TestCase):
+class ReconciliationWorkflowTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -77,23 +79,30 @@ class ReadOnlyWorkflowTest(unittest.TestCase):
         read_database.assert_called_once_with()
         return handler.response
 
-    def test_preview_and_finish_do_not_write_files(self):
+    def test_only_completed_run_is_archived(self):
         result, status = self.upload()
         self.assertEqual(status, 200)
         self.assertEqual(len(result["comparison"]["new"]), 1)
         self.assertEqual(len(result["comparison"]["missing"]), 1)
         self.assertEqual(list(Path(self.directory.name).iterdir()), [])
+        expected_cases = server.RUNS[result["run_id"]]["cases"]
 
         finish = self.handler("/api/finish", {"run_id": result["run_id"], "decisions": {
             "70001": {"action": "remove", "deleted_at": "2026-10-30"}
         }})
-        finish.do_POST()
+        with patch.object(server, "apply_reconciliation", return_value={"inserted": 1, "updated": 0, "removed": 1, "unchanged": 0}) as write_database:
+            finish.do_POST()
+        write_database.assert_called_once_with(expected_cases, [50182], {"70001": {"action": "remove", "deleted_at": "2026-10-30"}})
         summary, status = finish.response
         self.assertEqual(status, 200)
         self.assertEqual(summary["stats"]["inserted"], 1)
         self.assertEqual(summary["stats"]["removed"], 1)
-        self.assertEqual(list(Path(self.directory.name).iterdir()), [])
-        self.assertEqual(self.handler("/api/history").do_GET(), ([], 200))
+        history, status = self.handler("/api/history").do_GET()
+        self.assertEqual((status, len(history)), (200, 1))
+        self.assertEqual(history[0]["summary"]["removed"], 1)
+        downloaded, status = self.handler(f"/api/history/{result['run_id']}/download").do_GET()
+        self.assertEqual(status, 200)
+        self.assertTrue(downloaded["contents"].startswith(b"PK"))
 
     def test_cancel_discards_in_memory_preview(self):
         result, status = self.upload()
@@ -101,6 +110,16 @@ class ReadOnlyWorkflowTest(unittest.TestCase):
         self.assertIn(result["run_id"], server.RUNS)
         self.assertEqual(self.handler("/api/cancel", {"run_id": result["run_id"]}).do_POST(), ({"ok": True}, 200))
         self.assertNotIn(result["run_id"], server.RUNS)
+        self.assertEqual(list(Path(self.directory.name).iterdir()), [])
+
+    def test_failed_commit_keeps_run_for_retry_and_does_not_archive(self):
+        result, status = self.upload()
+        self.assertEqual(status, 200)
+        finish = self.handler("/api/finish", {"run_id": result["run_id"], "decisions": {}})
+        with patch.object(server, "apply_reconciliation", side_effect=database.DatabaseWriteError("Banco indisponível")):
+            finish.do_POST()
+        self.assertEqual(finish.response, ({"error": "Banco indisponível"}, 503))
+        self.assertIn(result["run_id"], server.RUNS)
         self.assertEqual(list(Path(self.directory.name).iterdir()), [])
 
     def test_database_error_does_not_become_format_error_or_create_run(self):
@@ -155,6 +174,86 @@ class DatabaseReadTest(unittest.TestCase):
         with patch.dict(os.environ, {"ENTER_POSTGRES_AID_URL": ""}):
             with self.assertRaisesRegex(database.DatabaseReadError, "ENTER_POSTGRES_AID_URL"):
                 database.load_existing_cases()
+
+
+class DatabaseWriteTest(unittest.TestCase):
+    def connection(self, fail_on=None, conflict_on_insert=False):
+        class Cursor:
+            def __init__(self): self.statements = []; self.last = ""
+            def __enter__(self): return self
+            def __exit__(self, *_): return None
+            def execute(self, statement, params=None):
+                self.last = statement
+                self.statements.append((statement, params))
+                if fail_on and fail_on in statement:
+                    raise psycopg2.ProgrammingError("test database error")
+            def fetchall(self):
+                return [
+                    {"legal_folder": 2, "case_number": "old", "case_status": "old", "deleted_at": None},
+                    {"legal_folder": 3, "case_number": "missing", "deleted_at": None},
+                    {"legal_folder": 4, "case_number": "same", "deleted_at": None},
+                ]
+            def fetchone(self):
+                return None if conflict_on_insert and self.last.startswith("INSERT") else {"legal_folder": 1}
+
+        class Connection:
+            def __init__(self): self.cursor_instance = Cursor(); self.committed = False; self.rolled_back = False; self.closed = False
+            def cursor(self, cursor_factory): return self.cursor_instance
+            def commit(self): self.committed = True
+            def rollback(self): self.rolled_back = True
+            def close(self): self.closed = True
+
+        return Connection()
+
+    def test_insert_update_and_soft_delete_are_scoped_and_atomic(self):
+        connection = self.connection()
+        incoming = [
+            {"legal_folder": 1, "case_number": "new", "requisitions": [], "documents": []},
+            {"legal_folder": 2, "case_number": "old", "case_status": "new"},
+            {"legal_folder": 4, "case_number": "same"},
+        ]
+        with patch.dict(os.environ, {"ENTER_POSTGRES_AID_URL": "postgresql://example/db"}), \
+             patch.object(database.psycopg2, "connect", return_value=connection):
+            stats = database.apply_reconciliation(incoming, [1, 2, 4], {"3": {"action": "remove", "deleted_at": "2026-10-30"}})
+        self.assertEqual(stats, {"inserted": 1, "updated": 1, "removed": 1, "unchanged": 1})
+        self.assertTrue(connection.committed)
+        self.assertFalse(connection.rolled_back)
+        self.assertTrue(connection.closed)
+        statements = connection.cursor_instance.statements
+        self.assertEqual(len(statements), 4)
+        self.assertIn("FOR UPDATE", statements[0][0])
+        self.assertIn("ON CONFLICT", statements[1][0])
+        self.assertIn("DO NOTHING", statements[1][0])
+        self.assertIn('"case_status" = %s, "updated_at" = now()', statements[2][0])
+        self.assertNotIn('"case_number" = %s', statements[2][0])
+        self.assertIn('SET "deleted_at" = %s', statements[3][0])
+        self.assertNotIn('"updated_at"', statements[3][0])
+        removal_at = statements[3][1][0]
+        self.assertEqual(removal_at, datetime.fromisoformat("2026-10-30T18:00:00-03:00"))
+        self.assertEqual(removal_at.utcoffset(), timedelta(hours=-3))
+
+    def test_failure_rolls_back_all_writes(self):
+        connection = self.connection(fail_on='SET "case_status"')
+        with patch.dict(os.environ, {"ENTER_POSTGRES_AID_URL": "postgresql://example/db"}), \
+             patch.object(database.psycopg2, "connect", return_value=connection):
+            with self.assertRaises(database.DatabaseWriteError):
+                database.apply_reconciliation(
+                    [{"legal_folder": 1, "case_number": "new"}, {"legal_folder": 2, "case_number": "old", "case_status": "new"}],
+                    [1, 2], {},
+                )
+        self.assertFalse(connection.committed)
+        self.assertTrue(connection.rolled_back)
+        self.assertTrue(connection.closed)
+
+    def test_new_case_conflict_never_updates_existing_row(self):
+        connection = self.connection(conflict_on_insert=True)
+        with patch.dict(os.environ, {"ENTER_POSTGRES_AID_URL": "postgresql://example/db"}), \
+             patch.object(database.psycopg2, "connect", return_value=connection):
+            with self.assertRaisesRegex(database.DatabaseWriteError, "processe o arquivo novamente"):
+                database.apply_reconciliation([{"legal_folder": 1, "case_number": "new"}], [1], {})
+        self.assertFalse(connection.committed)
+        self.assertTrue(connection.rolled_back)
+        self.assertEqual(len(connection.cursor_instance.statements), 2)
 
 
 if __name__ == "__main__":

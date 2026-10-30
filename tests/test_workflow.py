@@ -6,7 +6,7 @@ import openpyxl
 
 from app.consolidation import load_mapping, transform
 from app.consolidation.transform import read_source
-from app.reconcile import apply, preview
+from app.reconcile import preview, validate_decisions
 from app.server import invalid_cases
 
 
@@ -44,13 +44,9 @@ class WorkflowTest(unittest.TestCase):
             result = preview(cases, list(frame.attrs["report_keys"]), existing)
             self.assertEqual(len(result["updated"]), 1)
             self.assertEqual([item["legal_folder"] for item in result["missing"]], [70001])
-            next_cases, stats = apply(cases, existing, result, {"70001": {"action": "remove", "deleted_at": "2026-10-30"}})
-            self.assertEqual(stats["removed"], 1)
-            self.assertEqual(next(item for item in next_cases if item["legal_folder"] == 70001)["deleted_at"], "2026-10-30")
-            self.assertEqual(next(item for item in next_cases if item["legal_folder"] == 99999)["deleted_at"], None)
-            kept_cases, kept_stats = apply(cases, existing, result, {})
-            self.assertEqual(kept_stats["removed"], 0)
-            self.assertIsNone(next(item for item in kept_cases if item["legal_folder"] == 70001)["deleted_at"])
+            decisions = validate_decisions(result["missing"], {"70001": {"action": "remove", "deleted_at": "2026-10-30"}})
+            self.assertEqual(decisions[70001]["deleted_at"], "2026-10-30")
+            self.assertEqual(validate_decisions(result["missing"], {}), {})
 
 
 if __name__ == "__main__":

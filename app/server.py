@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import cgi
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
@@ -17,8 +18,8 @@ from uuid import uuid4
 from .consolidation import load_mapping, transform
 from .consolidation.cleaners import clean_cnj, is_blank
 from .consolidation.transform import read_source
-from .database import DatabaseReadError, load_existing_cases
-from .reconcile import normalize, planned_stats, preview
+from .database import DatabaseReadError, DatabaseWriteError, apply_reconciliation, load_existing_cases
+from .reconcile import normalize, preview
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +35,36 @@ RUNS: dict[str, dict] = {}
 
 def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def atomic_json(path: Path, value):
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def archive_completed_run(run_id: str, run: dict, stats: dict) -> None:
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc)
+    stored_name = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}_{run_id[:8]}.xlsx"
+    path = UPLOADS / stored_name
+    path.write_bytes(run["contents"])
+    entry = {
+        "id": run_id, "name": run["name"], "stored_name": stored_name,
+        "timestamp": timestamp.isoformat(), "status": "completed",
+        "summary": {"cases": len(run["cases"]), **stats, "invalid": len(run["invalid"])},
+    }
+    try:
+        history = read_json(HISTORY_FILE) if HISTORY_FILE.is_file() else []
+        history.insert(0, entry)
+        atomic_json(HISTORY_FILE, history)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def completed_history() -> list[dict]:
@@ -151,6 +182,9 @@ class Handler(BaseHTTPRequestHandler):
         except DatabaseReadError as error:
             logging.warning("Database read unavailable: %s", error)
             self.send_json({"error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
+        except DatabaseWriteError as error:
+            logging.warning("Database write failed: %s", error)
+            self.send_json({"error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
             self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception:
@@ -189,7 +223,8 @@ class Handler(BaseHTTPRequestHandler):
         comparison = preview(cases, report_keys, load_existing_cases())
         run_id = uuid4().hex
         with LOCK:
-            RUNS[run_id] = {"comparison": comparison, "invalid": invalid}
+            RUNS[run_id] = {"comparison": comparison, "invalid": invalid, "cases": cases,
+                            "report_keys": report_keys, "contents": contents, "name": original_name}
         self.send_json({"run_id": run_id, "cases": len(cases), "invalid": invalid, "comparison": comparison})
 
     def finish_run(self):
@@ -200,9 +235,15 @@ class Handler(BaseHTTPRequestHandler):
             run = RUNS.get(run_id)
             if run is None:
                 raise ValueError("Esta reconciliação não está mais ativa, envie o arquivo novamente")
-            stats = planned_stats(run["comparison"], decisions)
+            stats = apply_reconciliation(run["cases"], run["report_keys"], decisions)
             del RUNS[run_id]
-        self.send_json({"stats": {**stats, "invalid": len(run["invalid"])}})
+            warning = None
+            try:
+                archive_completed_run(run_id, run, stats)
+            except Exception:
+                logging.exception("Reconciliation committed, but upload archive could not be saved")
+                warning = "Reconciliação aplicada, mas não foi possível salvar o arquivo no histórico"
+        self.send_json({"stats": {**stats, "invalid": len(run["invalid"])}, "warning": warning})
 
 
 def main():

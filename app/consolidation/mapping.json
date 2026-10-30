@@ -1,0 +1,178 @@
+{
+  "sheet": 0,
+  "group_by": "legal_folder",
+  "fields": [
+    {
+      "source": "Pasta",
+      "target": "legal_folder",
+      "clean": "integer"
+    },
+    {
+      "source": "Numero atual do processo",
+      "target": "case_number",
+      "clean": "cnj"
+    },
+    {
+      "source": "Status",
+      "target": "case_status",
+      "clean": "text",
+      "occurrence": 1
+    },
+    {
+      "source": "Tipo de Ação",
+      "target": "case_type",
+      "clean": "text"
+    },
+    {
+      "source": "Advogado Principal do Cliente",
+      "target": "designated_office",
+      "clean": "text"
+    },
+    {
+      "source": "Adverso Principal",
+      "target": "plaintiff_name",
+      "clean": "name"
+    },
+    {
+      "source": "Documento Adverso Principal",
+      "target": "plaintiff_document",
+      "clean": "document"
+    },
+    {
+      "source": "Cliente Principal",
+      "target": "defendant_name",
+      "clean": "canonical",
+      "options": "defendant",
+      "attribute": "name"
+    },
+    {
+      "source": "Cliente Principal",
+      "target": "defendant_document",
+      "clean": "canonical",
+      "options": "defendant",
+      "attribute": "document"
+    },
+    {
+      "source": "Data de Início",
+      "target": "distribution_date",
+      "clean": "date"
+    },
+    {
+      "source": "Jurisdição Atual",
+      "target": "jurisdiction",
+      "clean": "text"
+    },
+    {
+      "source": "UF Foro",
+      "target": "state",
+      "clean": "text"
+    },
+    {
+      "source": "Causa raiz 2",
+      "target": "root_cause",
+      "clean": "text"
+    },
+    {
+      "source": "Produto",
+      "target": "product",
+      "clean": "text"
+    },
+    {
+      "source": "Unidade de Negócio",
+      "target": "business_unit",
+      "clean": "text"
+    },
+    {
+      "source": "Nota",
+      "target": "summary",
+      "clean": "multiline_text"
+    }
+  ],
+  "nested": [
+    {
+      "target": "requisitions",
+      "sort_by": [
+        "register_date",
+        "id"
+      ],
+      "fields": [
+        {
+          "source": "Número Requisição",
+          "target": "id",
+          "clean": "integer"
+        },
+        {
+          "source": "Status",
+          "target": "status",
+          "clean": "text",
+          "occurrence": 2
+        },
+        {
+          "source": "Tipo Requisição",
+          "target": "type",
+          "clean": "text"
+        },
+        {
+          "source": "Título",
+          "target": "title",
+          "clean": "text"
+        },
+        {
+          "source": "Data de cadastro",
+          "target": "register_date",
+          "clean": "date"
+        },
+        {
+          "source": "Cadastrado Por",
+          "target": "registered_by",
+          "clean": "text"
+        },
+        {
+          "source": "Última modificação",
+          "target": "update_date",
+          "clean": "date"
+        }
+      ]
+    },
+    {
+      "target": "documents",
+      "sort_by": [
+        "upload_date",
+        "file_name"
+      ],
+      "fields": [
+        {
+          "source": "Tipo",
+          "target": "label",
+          "clean": "text"
+        },
+        {
+          "source": "Nome original",
+          "target": "file_name",
+          "clean": "text"
+        },
+        {
+          "source": "Data",
+          "target": "upload_date",
+          "clean": "date"
+        }
+      ]
+    }
+  ],
+  "canonical_values": {
+    "defendant": [
+      {
+        "name": "NEON PAGAMENTOS S.A. INSTITUIÇÃO DE PAGAMENTO",
+        "document": "20.855.875/0001-82"
+      },
+      {
+        "name": "NEON FINANCEIRA CRÉDITO, FINANCIAMENTO E INVESTIMENTO S.A.",
+        "document": "11.285.104/0001-06"
+      },
+      {
+        "name": "NEON CONSIGA MAIS COBRANÇA E SERVIÇOS S.A.",
+        "document": "29.229.539/0001-07"
+      }
+    ]
+  }
+}

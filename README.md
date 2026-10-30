@@ -23,6 +23,8 @@ Abra [http://localhost:8000](http://localhost:8000). Para mudar a porta, defina 
 3. Ao concluir, a aplicação reconsulta os casos ativos e aplica tudo em uma transação: insere casos novos sem atualizar linhas existentes, atualiza somente os campos alterados e `updated_at` dos casos modificados, e grava `deleted_at` no dia escolhido às 18:00:00 com fuso UTC−03:00. Uma falha no banco causa rollback de toda a transação.
 4. Após o commit, o arquivo e o resumo são salvos no histórico. Prévia e cancelamento não entram no histórico. Caso o arquivamento falhe depois do commit, a interface informa que as alterações foram aplicadas, mas o histórico não pôde ser salvo.
 
+Prévias abandonadas expiram após uma hora; nesse caso, envie o arquivo novamente.
+
 `data/` é ignorado pelo Git. Configure `DATA_DIR` para apontar para um volume persistente no Railway se o histórico de arquivos precisar sobreviver a reinicializações e deploys. Entradas antigas em `data/history.json` continuam disponíveis para download.
 
 ## Railway

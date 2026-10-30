@@ -1,4 +1,4 @@
-"""A single Railway-friendly server for the local reconciliation workflow."""
+"""Railway-friendly HTTP server for Neon reconciliation."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import logging
 import os
 from pathlib import Path
 import threading
+from time import monotonic
 from urllib.parse import quote, urlparse
 from uuid import uuid4
 
@@ -28,9 +29,19 @@ DATA = Path(os.environ.get("DATA_DIR", str(ROOT / "data"))).resolve()
 UPLOADS = DATA / "uploads"
 HISTORY_FILE = DATA / "history.json"
 MAX_UPLOAD = 25 * 1024 * 1024
+MAX_REQUEST = MAX_UPLOAD + 64 * 1024  # Multipart headers and boundaries.
+RUN_TTL_SECONDS = 60 * 60
 REPORT_FORMAT_ERROR = "O arquivo não corresponde ao formato esperado de relatório customizado do Projuris"
 LOCK = threading.RLock()
 RUNS: dict[str, dict] = {}
+
+
+def expire_runs() -> None:
+    """Discard abandoned previews while the caller holds LOCK."""
+    cutoff = monotonic() - RUN_TTL_SECONDS
+    for run_id, run in list(RUNS.items()):
+        if run["created_at"] < cutoff:
+            del RUNS[run_id]
 
 
 def read_json(path: Path):
@@ -56,7 +67,7 @@ def archive_completed_run(run_id: str, run: dict, stats: dict) -> None:
     entry = {
         "id": run_id, "name": run["name"], "stored_name": stored_name,
         "timestamp": timestamp.isoformat(), "status": "completed",
-        "summary": {"cases": len(run["cases"]), **stats, "invalid": len(run["invalid"])},
+        "summary": {"cases": len(run["cases"]), **stats, "invalid": run["invalid_count"]},
     }
     try:
         history = read_json(HISTORY_FILE) if HISTORY_FILE.is_file() else []
@@ -193,13 +204,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def process(self):
         length = int(self.headers.get("Content-Length", "0"))
-        if length <= 0 or length > MAX_UPLOAD:
+        if length <= 0 or length > MAX_REQUEST:
             raise ValueError("Selecione um arquivo Excel de até 25 MB")
         content_type = self.headers.get("Content-Type", "")
         if not content_type.startswith("multipart/form-data"):
             raise ValueError("Envie o arquivo como formulário")
         form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": content_type, "CONTENT_LENGTH": str(length)})
-        if "file" not in form or not form["file"].filename:
+        if "file" not in form or isinstance(form["file"], list) or not form["file"].filename:
             raise ValueError("Selecione um arquivo Excel")
         upload = form["file"]
         original_name = Path(upload.filename).name
@@ -223,8 +234,10 @@ class Handler(BaseHTTPRequestHandler):
         comparison = preview(cases, report_keys, load_existing_cases())
         run_id = uuid4().hex
         with LOCK:
-            RUNS[run_id] = {"comparison": comparison, "invalid": invalid, "cases": cases,
-                            "report_keys": report_keys, "contents": contents, "name": original_name}
+            expire_runs()
+            RUNS[run_id] = {"invalid_count": len(invalid), "cases": cases,
+                            "report_keys": report_keys, "contents": contents, "name": original_name,
+                            "created_at": monotonic()}
         self.send_json({"run_id": run_id, "cases": len(cases), "invalid": invalid, "comparison": comparison})
 
     def finish_run(self):
@@ -232,6 +245,7 @@ class Handler(BaseHTTPRequestHandler):
         run_id = body.get("run_id")
         decisions = body.get("decisions", {})
         with LOCK:
+            expire_runs()
             run = RUNS.get(run_id)
             if run is None:
                 raise ValueError("Esta reconciliação não está mais ativa, envie o arquivo novamente")
@@ -243,7 +257,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 logging.exception("Reconciliation committed, but upload archive could not be saved")
                 warning = "Reconciliação aplicada, mas não foi possível salvar o arquivo no histórico"
-        self.send_json({"stats": {**stats, "invalid": len(run["invalid"])}, "warning": warning})
+        self.send_json({"stats": {**stats, "invalid": run["invalid_count"]}, "warning": warning})
 
 
 def main():

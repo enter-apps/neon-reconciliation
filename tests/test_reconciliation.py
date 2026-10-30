@@ -61,7 +61,7 @@ class ReconciliationWorkflowTest(unittest.TestCase):
         sheet.append(row)
         stream = io.BytesIO()
         workbook.save(stream)
-        boundary = b"readonly-boundary"
+        boundary = b"reconciliation-boundary"
         payload = (
             b"--" + boundary
             + b'\r\nContent-Disposition: form-data; name="file"; filename="relatorio.xlsx"\r\n'
@@ -121,6 +121,17 @@ class ReconciliationWorkflowTest(unittest.TestCase):
         self.assertEqual(finish.response, ({"error": "Banco indisponível"}, 503))
         self.assertIn(result["run_id"], server.RUNS)
         self.assertEqual(list(Path(self.directory.name).iterdir()), [])
+
+    def test_abandoned_preview_expires_without_writing(self):
+        result, status = self.upload()
+        self.assertEqual(status, 200)
+        server.RUNS[result["run_id"]]["created_at"] = server.monotonic() - server.RUN_TTL_SECONDS - 1
+        finish = self.handler("/api/finish", {"run_id": result["run_id"], "decisions": {}})
+        with patch.object(server, "apply_reconciliation") as write_database:
+            finish.do_POST()
+        self.assertEqual(finish.response[1], 400)
+        write_database.assert_not_called()
+        self.assertNotIn(result["run_id"], server.RUNS)
 
     def test_database_error_does_not_become_format_error_or_create_run(self):
         result, status = self.upload(database.DatabaseReadError("Banco indisponível"))

@@ -41,8 +41,6 @@ h3 { font-size: 14px; font-weight: 500; }
 .button:disabled, .button.primary:disabled { background: #f0f0f0; box-shadow: none; color: #aaa; cursor: default; }
 .button.primary { background: var(--orange); color: #111; }
 .icon { display: block; flex: none; }
-.tag { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 10px; min-height: 24px; background: #f4f4f4; font-size: 12px; font-weight: 500; color: #525252; white-space: nowrap; }
-.tag.green { background: var(--green); color: #2e6219; }
 .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
 .alert { display: flex; align-items: center; gap: 14px; border-radius: 10px; padding: 17px; line-height: 1.4; font-size: 12px; margin: 16px 0; }
 .alert.error { background: #fff0ed; color: #822a28; }
